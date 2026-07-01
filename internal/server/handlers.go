@@ -117,6 +117,9 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	web.HandleFunc("PUT /api/agent/{type}/sessions/{id}/permissions", h.handleAgentSetPermissions)
 
 	mux.Handle("/api/", auth.WebAuth(h.authStore)(web))
+
+	// ── Root: redirect to frontend ──
+	mux.HandleFunc("GET /{$}", h.handleRoot)
 }
 
 // ── Permission helpers ──
@@ -714,6 +717,16 @@ func (h *Handlers) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sess)
+}
+
+// handleRoot redirects to the frontend dashboard (Vite dev server or
+// production static host). The daemon itself only serves the API.
+func (h *Handlers) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	http.Redirect(w, r, "http://localhost:5173", http.StatusFound)
 }
 
 func (h *Handlers) handleHealth(w http.ResponseWriter, r *http.Request) {
