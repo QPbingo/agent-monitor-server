@@ -99,24 +99,40 @@ func (h *SSEHub) Run() {
 
 // Notify serializes a session/hierarchy event and broadcasts it to all clients.
 // Called by SessionManager via SetNotify / SetHierarchyNotify.
+//
+// IMPORTANT: This method is called from HandleEvent which holds the
+// SessionManager write lock (sm.mu). The broadcast channel consumer
+// (SSEHub.Run) may need to acquire that same lock via GetSession(). To
+// prevent a circular deadlock, this send MUST be non-blocking — if the
+// broadcast channel is full the event is dropped (eventual consistency:
+// the next snapshot or delta will bring clients up to date).
 func (h *SSEHub) Notify(eventType string, data interface{}) {
+	var event scopedSSEEvent
 	switch eventType {
 	case "delta":
 		d, ok := data.(*session.Delta)
 		if !ok {
 			return
 		}
-		h.broadcast <- scopedSSEEvent{kind: eventType, data: d}
+		event = scopedSSEEvent{kind: eventType, data: d}
 	case "session_added":
 		s, ok := data.(*session.Session)
 		if !ok {
 			return
 		}
-		h.broadcast <- scopedSSEEvent{kind: eventType, data: s}
+		event = scopedSSEEvent{kind: eventType, data: s}
 	case "hierarchy_updated":
-		h.broadcast <- scopedSSEEvent{kind: eventType}
+		event = scopedSSEEvent{kind: eventType}
 	default:
 		return
+	}
+	select {
+	case h.broadcast <- event:
+	default:
+		// Channel full — drop the event rather than blocking. The caller
+		// (HandleEvent) holds the SessionManager write lock; blocking here
+		// would deadlock the SSEHub goroutine which needs that same lock.
+		log.Printf("[sse] broadcast channel full, dropping %s event", eventType)
 	}
 }
 

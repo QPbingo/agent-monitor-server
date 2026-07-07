@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/heybox/agent-monitor-server/internal/session"
@@ -81,6 +82,7 @@ type EventWatcher struct {
 	watcher    *fsnotify.Watcher // OS-level file change monitor
 	lastPos    int64             // Byte offset of last processed position
 	done       chan struct{}     // Close to signal the event loop to exit
+	mu         sync.Mutex        // Protects concurrent handleNewLines() calls
 }
 
 // NewEventWatcher creates a new event watcher for the given directory.
@@ -153,8 +155,10 @@ func (ew *EventWatcher) Start() error {
 		ew.lastPos = fi.Size()
 	}
 
-	// Process any events that were written between the last run and now
-	ew.handleNewLines()
+	// Process any events that were written between the last run and now.
+	// Run in a goroutine so the HTTP server can start immediately even when
+	// there is a large backlog (e.g. 60+ MB events.jsonl with 60K+ lines).
+	go ew.handleNewLines()
 
 	// Launch the background event loop
 	go ew.loop()
@@ -244,6 +248,9 @@ func (ew *EventWatcher) loop() {
 //	  - Invalid lines: offset is advanced past them so they don't block the pipeline.
 //	  - File recreated: offset is reset to 0 and all content is re-read.
 func (ew *EventWatcher) handleNewLines() {
+	ew.mu.Lock()
+	defer ew.mu.Unlock()
+
 	f, err := os.Open(ew.filePath)
 	if err != nil {
 		log.Printf("[eventwatcher] open events.jsonl: %v", err)
