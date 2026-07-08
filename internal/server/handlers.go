@@ -115,6 +115,7 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	web.HandleFunc("POST /api/agent/{type}/sessions/{id}/resume", h.handleAgentResume)
 	web.HandleFunc("PUT /api/agent/{type}/sessions/{id}/rename", h.handleAgentRename)
 	web.HandleFunc("PUT /api/agent/{type}/sessions/{id}/permissions", h.handleAgentSetPermissions)
+	web.HandleFunc("GET /api/agent/{type}/sessions/{id}/diff", h.handleAgentDiff)
 
 	mux.Handle("/api/", auth.WebAuth(h.authStore)(web))
 
