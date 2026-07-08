@@ -80,8 +80,8 @@ func NewRecovery(userID, deviceID string, manager *SessionManager) *Recovery {
 //     b. Create a new Session with Status=unknown.
 //     c. Add to SessionManager (persist to SQLite).
 //     d. Try to match against running OS process:
-//        - Matches by agent_type + CWD hash (SHA256[:8]).
-//        - If found → BindPIDToSession (promote to active, set process fields).
+//     - Matches by agent_type + CWD hash (SHA256[:8]).
+//     - If found → BindPIDToSession (promote to active, set process fields).
 //  4. Log recovery statistics.
 //
 // Recovered sessions with Status=unknown that were not matched to a running
@@ -111,23 +111,23 @@ func (r *Recovery) Run() {
 		// Status=unknown: we don't know if the agent process is still running.
 		// The PID match below and subsequent scans will determine the actual status.
 		sess := &Session{
-			UserID:         r.userID,
-			DeviceID:       r.deviceID,
-			AgentType:      c.AgentType,
-			AgentSessionID: c.AgentSessionID,
-			SessionKey:     key,
-			Status:         StatusUnknown,
-			StartTimeMs:    c.StartTimeMs,
+			UserID:          r.userID,
+			DeviceID:        r.deviceID,
+			AgentType:       c.AgentType,
+			AgentSessionID:  c.AgentSessionID,
+			SessionKey:      key,
+			Status:          StatusUnknown,
+			StartTimeMs:     c.StartTimeMs,
 			LastEventTimeMs: c.StartTimeMs,
-			LastEventType:  c.LastEventType,
-			LastFile:       c.LastFile,
-			LastCommand:    c.LastCommand,
-			TurnCount:      c.TurnCount,
-			GitBranch:      c.GitBranch,
-			CWD:            c.CWD,
-			PID:            c.PID,
-			Terminal:       c.Terminal,
-			lastHookTime:   c.StartTimeMs,
+			LastEventType:   c.LastEventType,
+			LastFile:        c.LastFile,
+			LastCommand:     c.LastCommand,
+			TurnCount:       c.TurnCount,
+			GitBranch:       c.GitBranch,
+			CWD:             c.CWD,
+			PID:             c.PID,
+			Terminal:        c.Terminal,
+			lastHookTime:    c.StartTimeMs,
 		}
 
 		// Add to session manager (persists to SQLite if store is available)
@@ -152,9 +152,9 @@ func (r *Recovery) Run() {
 // scanAllTranscripts collects recovery candidates from all three agent sources.
 //
 // Scans:
-//   1. OpenCode transcripts   (~/.config/opencode/sessions/*.jsonl)
-//   2. Claude Code transcripts (~/.claude/projects/*/*.jsonl)
-//   3. Codex transcripts      (~/.codex/sessions/**/rollout-*.jsonl)
+//  1. OpenCode transcripts   (~/.config/opencode/sessions/*.jsonl)
+//  2. Claude Code transcripts (~/.claude/projects/*/*.jsonl)
+//  3. Codex transcripts      (~/.codex/sessions/**/rollout-*.jsonl)
 //
 // All transcripts are filtered to only include entries from the last 24 hours.
 func (r *Recovery) scanAllTranscripts(cutoff time.Time) []RecoveryCandidate {
@@ -297,15 +297,15 @@ func (r *Recovery) scanTranscriptDir(dir, agentType string, cutoff time.Time) []
 //
 // Processing:
 //
-//	1. Open the file.
-//	2. Scan line by line (2MB buffer for large JSON payloads).
-//	3. For each line:
-//	   a. Parse JSON → extract session metadata.
-//	   b. Extract/validate session_id.
-//	   c. Deduplicate within the file (first entry for each session_id wins).
-//	   d. Check timestamp cutoff (24 hours).
-//	   e. Compute CWD hash for process matching.
-//	   f. Create RecoveryCandidate.
+//  1. Open the file.
+//  2. Scan line by line (2MB buffer for large JSON payloads).
+//  3. For each line:
+//     a. Parse JSON → extract session metadata.
+//     b. Extract/validate session_id.
+//     c. Deduplicate within the file (first entry for each session_id wins).
+//     d. Check timestamp cutoff (24 hours).
+//     e. Compute CWD hash for process matching.
+//     f. Create RecoveryCandidate.
 //
 // Session deduplication is per-file only (seenSessions map).
 // If the same session appears in multiple files, it will be a separate

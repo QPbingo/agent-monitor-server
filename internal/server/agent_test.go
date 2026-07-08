@@ -85,7 +85,7 @@ func newAgentManagerTestServer(t *testing.T) (*Server, string, *fakeAgentSDK, *s
 	agentMgr := sdk.NewAgentManager()
 	fake := &fakeAgentSDK{}
 	agentMgr.Register(sdk.AgentClaude, fake)
-	srv := New("127.0.0.1:0", mgr, "daemon-tok", authStore, hierStore, agentMgr, "http://localhost:5173")
+	srv := New("127.0.0.1:0", mgr, "daemon-tok", authStore, hierStore, agentMgr, nil, "http://localhost:5173")
 	srv.Start()
 	t.Cleanup(srv.Shutdown)
 	return srv, tok, fake, mgr, ws.ID

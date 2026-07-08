@@ -14,6 +14,7 @@ import (
 	"github.com/heybox/agent-monitor-hook/sdk"
 	"github.com/heybox/agent-monitor-server/internal/auth"
 	"github.com/heybox/agent-monitor-server/internal/hierarchy"
+	"github.com/heybox/agent-monitor-server/internal/registry"
 	"github.com/heybox/agent-monitor-server/internal/session"
 )
 
@@ -24,10 +25,11 @@ type Handlers struct {
 	authStore *auth.Store
 	hierStore *hierarchy.Store
 	agentMgr  *sdk.AgentManager
+	regStore  *registry.Store
 }
 
-func NewHandlers(s *session.SessionManager, tok string, sse *SSEHub, as *auth.Store, hs *hierarchy.Store, am *sdk.AgentManager) *Handlers {
-	return &Handlers{sessions: s, token: tok, sseHub: sse, authStore: as, hierStore: hs, agentMgr: am}
+func NewHandlers(s *session.SessionManager, tok string, sse *SSEHub, as *auth.Store, hs *hierarchy.Store, am *sdk.AgentManager, rs *registry.Store) *Handlers {
+	return &Handlers{sessions: s, token: tok, sseHub: sse, authStore: as, hierStore: hs, agentMgr: am, regStore: rs}
 }
 
 // parsePathID extracts an int64 path value and writes 400 on failure.
@@ -117,7 +119,17 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	web.HandleFunc("PUT /api/agent/{type}/sessions/{id}/permissions", h.handleAgentSetPermissions)
 	web.HandleFunc("GET /api/agent/{type}/sessions/{id}/diff", h.handleAgentDiff)
 
-	mux.Handle("/api/", auth.WebAuth(h.authStore)(web))
+		// Agent Registry
+		web.HandleFunc("GET /api/agent-runtimes/current", h.handleGetCurrentRuntime)
+		web.HandleFunc("POST /api/agent-runtimes/scan", h.handleScanCapabilities)
+		web.HandleFunc("GET /api/agent-capabilities", h.handleListCapabilities)
+		web.HandleFunc("GET /api/workspaces/{workspace_id}/agent-profiles", h.handleListProfiles)
+		web.HandleFunc("POST /api/workspaces/{workspace_id}/agent-profiles", h.handleCreateProfile)
+		web.HandleFunc("GET /api/agent-profiles/{id}", h.handleGetProfile)
+		web.HandleFunc("PUT /api/agent-profiles/{id}", h.handleUpdateProfile)
+		web.HandleFunc("DELETE /api/agent-profiles/{id}", h.handleDeleteProfile)
+
+		mux.Handle("/api/", auth.WebAuth(h.authStore)(web))
 
 	// ── Root: redirect to frontend ──
 	mux.HandleFunc("GET /{$}", h.handleRoot)

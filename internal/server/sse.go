@@ -10,6 +10,7 @@ import (
 
 	"github.com/heybox/agent-monitor-server/internal/auth"
 	"github.com/heybox/agent-monitor-server/internal/hierarchy"
+	"github.com/heybox/agent-monitor-server/internal/registry"
 	"github.com/heybox/agent-monitor-server/internal/session"
 	"github.com/heybox/agent-monitor-hook/sdk"
 )
@@ -36,13 +37,14 @@ const (
 //	B. Register-before-snapshot — a client joins the broadcast set BEFORE its
 //	   initial snapshot is sent, so deltas produced during snapshot delivery
 //	   are not lost (the client receives them after the snapshot).
-func NewSSEHub(sessions *session.SessionManager, hierStore *hierarchy.Store, authStore *auth.Store, agentMgr *sdk.AgentManager) *SSEHub {
+func NewSSEHub(sessions *session.SessionManager, hierStore *hierarchy.Store, authStore *auth.Store, agentMgr *sdk.AgentManager, regStore *registry.Store) *SSEHub {
 	return &SSEHub{
 		clients:    make(map[*SSEClient]struct{}),
 		sessions:   sessions,
 		hierStore:  hierStore,
 		authStore:  authStore,
 		agentMgr:   agentMgr,
+		regStore:   regStore,
 		register:   make(chan *SSEClient),
 		unregister: make(chan *SSEClient),
 		broadcast:  make(chan interface{}, 256),
@@ -56,6 +58,7 @@ type SSEHub struct {
 	hierStore  *hierarchy.Store
 	authStore  *auth.Store
 	agentMgr   *sdk.AgentManager
+	regStore   *registry.Store
 	register   chan *SSEClient
 	unregister chan *SSEClient
 	broadcast  chan interface{}

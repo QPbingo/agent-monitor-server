@@ -100,7 +100,7 @@ func TestSSEClient_WriteComment(t *testing.T) {
 // TestSSEHub_BroadcastDelivers covers the broadcast path: Notify enqueues a
 // delta and the hub Run() loop delivers it to a registered client's send chan.
 func TestSSEHub_BroadcastDelivers(t *testing.T) {
-	h := NewSSEHub(nil, nil, nil, nil)
+	h := NewSSEHub(nil, nil, nil, nil, nil)
 	go h.Run()
 
 	c := &SSEClient{

@@ -540,7 +540,7 @@ func TestAUTH_SessionInputRequiresProjectAccess(t *testing.T) {
 		t.Fatalf("ensure inspiration: %v", err)
 	}
 	mgr.SetHierarchyStore(hierStore)
-	realSrv := New("127.0.0.1:0", mgr, "daemon-tok", authStore, hierStore, nil, "http://localhost:5173")
+	realSrv := New("127.0.0.1:0", mgr, "daemon-tok", authStore, hierStore, nil, nil, "http://localhost:5173")
 	realSrv.Start()
 	t.Cleanup(realSrv.Shutdown)
 	ts := httptest.NewServer(realSrv.httpSrv.Handler)
@@ -623,7 +623,7 @@ func TestAUTH_FirstRegisteredUserCanSeeResetAutoAssignedAgentSession(t *testing.
 		t.Fatalf("ensure inspiration: %v", err)
 	}
 	mgr.SetHierarchyStore(hierStore)
-	srv := New("127.0.0.1:0", mgr, "daemon-tok", authStore, hierStore, nil, "http://localhost:5173")
+	srv := New("127.0.0.1:0", mgr, "daemon-tok", authStore, hierStore, nil, nil, "http://localhost:5173")
 	srv.Start()
 	t.Cleanup(srv.Shutdown)
 	ts := httptest.NewServer(srv.httpSrv.Handler)

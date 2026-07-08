@@ -88,6 +88,7 @@ import (
 	"github.com/heybox/agent-monitor-server/internal/auth"
 	"github.com/heybox/agent-monitor-server/internal/hierarchy"
 	"github.com/heybox/agent-monitor-server/internal/hook"
+	"github.com/heybox/agent-monitor-server/internal/registry"
 	"github.com/heybox/agent-monitor-server/internal/scanner"
 	"github.com/heybox/agent-monitor-server/internal/server"
 	"github.com/heybox/agent-monitor-server/internal/session"
@@ -174,12 +175,24 @@ func main() {
 		if err := hierStore.EnsureTables(); err != nil {
 			log.Printf("[hierarchy] create tables: %v", err)
 		}
+		if err := hierStore.RunMigrations(); err != nil {
+			log.Printf("[hierarchy] run migrations: %v", err)
+		}
 
 		// Ensure inspiration workspace exists
 		if _, _, err := hierStore.EnsureInspiration(); err != nil {
 			log.Printf("[hierarchy] ensure inspiration: %v", err)
 		} else {
 			mgr.SetHierarchyStore(hierStore)
+		}
+	}
+
+	// ── Step 5.6: Registry initialization ──────────────────────────────
+	var regStore *registry.Store
+	if sdb, err := store.DB(); err == nil {
+		regStore = registry.NewStore(sdb)
+		if err := regStore.EnsureTables(); err != nil {
+			log.Printf("[registry] create tables: %v", err)
 		}
 	}
 
@@ -275,7 +288,7 @@ func main() {
 	agentMgr.Register(sdk.AgentCodex, sdk.NewCodexSDK(sdk.CodexOptions{}))
 	defer agentMgr.CloseAll()
 
-	srv := server.New(*listen, mgr, tok, authStore, hierStore, agentMgr, *corsOrigins)
+	srv := server.New(*listen, mgr, tok, authStore, hierStore, agentMgr, regStore, *corsOrigins)
 
 	// Wire SessionManager notifications to SSE broadcasts.
 	// Whenever a session is created or modified, SetNotify calls back

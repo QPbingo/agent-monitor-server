@@ -47,6 +47,7 @@ import (
 
 	"github.com/heybox/agent-monitor-server/internal/auth"
 	"github.com/heybox/agent-monitor-server/internal/hierarchy"
+	"github.com/heybox/agent-monitor-server/internal/registry"
 	"github.com/heybox/agent-monitor-server/internal/session"
 	"github.com/heybox/agent-monitor-hook/sdk"
 )
@@ -77,12 +78,12 @@ type Server struct {
 // Routes are registered immediately. The server doesn't start listening until
 // Start() is called. The mux is wrapped in a CORS middleware so cross-origin
 // frontend requests (with credentials) are permitted.
-func New(addr string, sessions *session.SessionManager, daemonToken string, authStore *auth.Store, hierStore *hierarchy.Store, agentMgr *sdk.AgentManager, corsOrigins string) *Server {
+func New(addr string, sessions *session.SessionManager, daemonToken string, authStore *auth.Store, hierStore *hierarchy.Store, agentMgr *sdk.AgentManager, regStore *registry.Store, corsOrigins string) *Server {
 	// Create the SSE Hub (manages all connected dashboard clients)
-	sseHub := NewSSEHub(sessions, hierStore, authStore, agentMgr)
+	sseHub := NewSSEHub(sessions, hierStore, authStore, agentMgr, regStore)
 
 	// Create HTTP route handlers
-	handlers := NewHandlers(sessions, daemonToken, sseHub, authStore, hierStore, agentMgr)
+	handlers := NewHandlers(sessions, daemonToken, sseHub, authStore, hierStore, agentMgr, regStore)
 
 	// Register all routes on the ServeMux
 	mux := http.NewServeMux()

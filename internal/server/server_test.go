@@ -56,7 +56,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 		t.Fatalf("create token: %v", err)
 	}
 
-	srv := New("127.0.0.1:0", mgr, "daemon-tok", authStore, hierStore, nil, "http://localhost:5173")
+	srv := New("127.0.0.1:0", mgr, "daemon-tok", authStore, hierStore, nil, nil, "http://localhost:5173")
 	srv.Start()
 	t.Cleanup(srv.Shutdown)
 	return srv, tok

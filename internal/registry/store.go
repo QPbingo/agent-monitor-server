@@ -138,6 +138,11 @@ func (s *Store) EnsureRuntime(userID, deviceID, name, defaultRoot string) (*Runt
 	return s.GetRuntime(id)
 }
 
+// GetRuntimeByKey finds a runtime by user_id + device_id.
+func (s *Store) GetRuntimeByKey(userID, deviceID string) (*Runtime, error) {
+	return s.getRuntimeByKey(userID, deviceID)
+}
+
 func (s *Store) getRuntimeByKey(userID, deviceID string) (*Runtime, error) {
 	r := &Runtime{}
 	err := s.db.QueryRow(`
