@@ -129,6 +129,12 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 		web.HandleFunc("PUT /api/agent-profiles/{id}", h.handleUpdateProfile)
 		web.HandleFunc("DELETE /api/agent-profiles/{id}", h.handleDeleteProfile)
 
+		// Story Run
+		web.HandleFunc("POST /api/stories/{id}/bind-agent", h.handleBindAgent)
+		web.HandleFunc("POST /api/stories/{id}/runs", h.handleCreateRun)
+		web.HandleFunc("GET /api/stories/{id}/runs", h.handleListRuns)
+		web.HandleFunc("POST /api/stories/{id}/runs/{run_id}/cancel", h.handleCancelRun)
+
 		mux.Handle("/api/", auth.WebAuth(h.authStore)(web))
 
 	// ── Root: redirect to frontend ──

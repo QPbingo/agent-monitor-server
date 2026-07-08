@@ -491,6 +491,22 @@ func (s *Store) UpdateRunStatus(id int64, status RunStatus, errText string, fini
 	return s.GetRun(id)
 }
 
+// UpdateRunSession updates the session-related fields on a StoryRun.
+func (s *Store) UpdateRunSession(id int64, sessionKey, agentSessionID, sessionTitle string) error {
+	now := time.Now().UnixMilli()
+	_, err := s.db.Exec(`
+		UPDATE story_runs SET session_key=?, agent_session_id=?, session_title=?, updated_at=?
+		WHERE id=?
+	`, sessionKey, agentSessionID, sessionTitle, now, id)
+	return err
+}
+
+// UpdateRunExecID sets the exec_id on a StoryRun.
+func (s *Store) UpdateRunExecID(id int64, execID string) error {
+	_, err := s.db.Exec(`UPDATE story_runs SET exec_id=? WHERE id=?`, execID, id)
+	return err
+}
+
 func (s *Store) ListRunsForStory(storyID int64) ([]StoryRun, error) {
 	return s.listRuns(0, "story_id = ?", storyID)
 }

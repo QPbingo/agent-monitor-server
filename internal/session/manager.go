@@ -41,6 +41,7 @@ func (sm *SessionManager) SetHierarchyStore(h *hierarchy.Store) { sm.hierStore =
 func (sm *SessionManager) SetHierarchyNotify(fn NotifyFunc)     { sm.hierNotify = fn }
 func (sm *SessionManager) UserID() string                       { return sm.userID }
 func (sm *SessionManager) DeviceID() string                     { return sm.deviceID }
+func (sm *SessionManager) Store() *Store                        { return sm.store }
 
 func (sm *SessionManager) RegisterSDKSession(agentType string, sdkSess *sdk.Session, workspaceID int64, topicID int64, storyName string) (*Session, error) {
 	if sdkSess == nil {
