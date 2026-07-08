@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/heybox/agent-monitor-hook/sdk"
 	"github.com/heybox/agent-monitor-server/internal/auth"
 	"github.com/heybox/agent-monitor-server/internal/hierarchy"
-	"github.com/heybox/agent-monitor-hook/sdk"
 )
 
 func makePayload(fields map[string]interface{}) json.RawMessage {
@@ -462,7 +462,7 @@ func TestRegisterSDKSessionCreatesMonitoredSession(t *testing.T) {
 	mgr, _, wsID := newSDKSessionManagerFixture(t)
 	sdkSess := &sdk.Session{ID: "sdk-sid", AgentType: sdk.AgentClaude, Title: "SDK title", CWD: "/tmp/sdk", CreatedAt: time.Now()}
 
-	monitored, err := mgr.RegisterSDKSession("claude", sdkSess, wsID)
+	monitored, err := mgr.RegisterSDKSession("claude", sdkSess, wsID, 0, "")
 	if err != nil {
 		t.Fatalf("RegisterSDKSession: %v", err)
 	}
@@ -481,9 +481,59 @@ func TestRegisterSDKSessionCreatesMonitoredSession(t *testing.T) {
 	}
 }
 
+func TestRegisterSDKSessionWithExplicitTopicCreatesStoryUnderThatTopic(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	db, err := store.DB()
+	if err != nil {
+		t.Fatalf("DB: %v", err)
+	}
+	hierStore := hierarchy.NewStore(db)
+	if err := hierStore.EnsureTables(); err != nil {
+		t.Fatalf("hier tables: %v", err)
+	}
+	ws, err := hierStore.CreateWorkspace("ws1", "")
+	if err != nil {
+		t.Fatalf("create ws: %v", err)
+	}
+	proj, err := hierStore.CreateProject(ws.ID, "proj1", "")
+	if err != nil {
+		t.Fatalf("create proj: %v", err)
+	}
+	topic, err := hierStore.CreateTopic(proj.ID, "topic1", "", "claude")
+	if err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
+
+	mgr := NewSessionManager(store, "local", "device-1")
+	mgr.SetHierarchyStore(hierStore)
+
+	sdkSess := &sdk.Session{ID: "sdk-sid-2", AgentType: sdk.AgentClaude, CreatedAt: time.Now()}
+	monitored, err := mgr.RegisterSDKSession("claude", sdkSess, ws.ID, topic.ID, "My Explicit Story")
+	if err != nil {
+		t.Fatalf("RegisterSDKSession: %v", err)
+	}
+	if monitored.StoryID == nil {
+		t.Fatalf("expected a story to be linked")
+	}
+	story, err := hierStore.GetStory(*monitored.StoryID)
+	if err != nil {
+		t.Fatalf("GetStory: %v", err)
+	}
+	if story.TopicID != topic.ID {
+		t.Fatalf("story topic_id=%d, want %d (explicit topic)", story.TopicID, topic.ID)
+	}
+	if story.Name != "My Explicit Story" {
+		t.Fatalf("story name=%q, want %q", story.Name, "My Explicit Story")
+	}
+}
+
 func TestRecordSDKPromptDoesNotCreatePendingInput(t *testing.T) {
 	mgr, _, wsID := newSDKSessionManagerFixture(t)
-	monitored, err := mgr.RegisterSDKSession("claude", &sdk.Session{ID: "sdk-sid", AgentType: sdk.AgentClaude, CreatedAt: time.Now()}, wsID)
+	monitored, err := mgr.RegisterSDKSession("claude", &sdk.Session{ID: "sdk-sid", AgentType: sdk.AgentClaude, CreatedAt: time.Now()}, wsID, 0, "")
 	if err != nil {
 		t.Fatalf("RegisterSDKSession: %v", err)
 	}
@@ -503,7 +553,7 @@ func TestRecordSDKPromptDoesNotCreatePendingInput(t *testing.T) {
 
 func TestRecordSDKMessageEmitsLiveOutputDelta(t *testing.T) {
 	mgr, _, wsID := newSDKSessionManagerFixture(t)
-	monitored, err := mgr.RegisterSDKSession("claude", &sdk.Session{ID: "sdk-sid", AgentType: sdk.AgentClaude, CreatedAt: time.Now()}, wsID)
+	monitored, err := mgr.RegisterSDKSession("claude", &sdk.Session{ID: "sdk-sid", AgentType: sdk.AgentClaude, CreatedAt: time.Now()}, wsID, 0, "")
 	if err != nil {
 		t.Fatalf("RegisterSDKSession: %v", err)
 	}

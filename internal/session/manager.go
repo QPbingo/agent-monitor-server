@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/heybox/agent-monitor-hook/sdk"
 	"github.com/heybox/agent-monitor-server/internal/hierarchy"
 	"github.com/heybox/agent-monitor-server/internal/scanner"
-	"github.com/heybox/agent-monitor-hook/sdk"
 )
 
 type NotifyFunc func(eventType string, data interface{})
@@ -42,7 +42,7 @@ func (sm *SessionManager) SetHierarchyNotify(fn NotifyFunc)     { sm.hierNotify 
 func (sm *SessionManager) UserID() string                       { return sm.userID }
 func (sm *SessionManager) DeviceID() string                     { return sm.deviceID }
 
-func (sm *SessionManager) RegisterSDKSession(agentType string, sdkSess *sdk.Session, workspaceID int64) (*Session, error) {
+func (sm *SessionManager) RegisterSDKSession(agentType string, sdkSess *sdk.Session, workspaceID int64, topicID int64, storyName string) (*Session, error) {
 	if sdkSess == nil {
 		return nil, nil
 	}
@@ -79,7 +79,17 @@ func (sm *SessionManager) RegisterSDKSession(agentType string, sdkSess *sdk.Sess
 	sm.mu.Unlock()
 
 	if sm.hierStore != nil {
-		story, err := sm.hierStore.FindOrCreateAgentSessionStory(workspaceID, agentType, key, sess.SessionTitle)
+		var story *hierarchy.Story
+		var err error
+		if topicID != 0 {
+			name := storyName
+			if name == "" {
+				name = sess.SessionTitle
+			}
+			story, err = sm.hierStore.CreateStoryForSession(topicID, name, key)
+		} else {
+			story, err = sm.hierStore.FindOrCreateAgentSessionStory(workspaceID, agentType, key, sess.SessionTitle)
+		}
 		if err != nil {
 			return nil, err
 		}
