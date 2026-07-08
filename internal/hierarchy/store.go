@@ -383,6 +383,38 @@ func (s *Store) DeleteStory(id int64) error {
 	return err
 }
 
+// GetWorkspaceIDForTopic resolves a topic's owning workspace, so callers can
+// verify a client-supplied topic_id actually belongs to a workspace the
+// caller has permission on — existence of the topic alone is not enough.
+func (s *Store) GetWorkspaceIDForTopic(topicID int64) (int64, error) {
+	var workspaceID int64
+	err := s.db.QueryRow(`
+		SELECT p.workspace_id
+		FROM topics t
+		JOIN projects p ON p.id = t.project_id
+		WHERE t.id = ?
+	`, topicID).Scan(&workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return workspaceID, nil
+}
+
+// CreateStoryForSession creates a new story under topicID and immediately
+// links it to sessionKey — for callers that already know exactly which
+// topic a session belongs to, as opposed to FindOrCreateAgentSessionStory's
+// auto-bucketing fallback.
+func (s *Store) CreateStoryForSession(topicID int64, name, sessionKey string) (*Story, error) {
+	story, err := s.CreateStory(topicID, name, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.LinkSessionToStory(story.ID, sessionKey); err != nil {
+		return nil, err
+	}
+	return story, nil
+}
+
 // ── Inspiration ──
 
 func (s *Store) EnsureInspiration() (*Workspace, *Project, error) {
