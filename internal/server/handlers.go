@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/heybox/agent-monitor-hook/sdk"
 	"github.com/heybox/agent-monitor-server/internal/auth"
 	"github.com/heybox/agent-monitor-server/internal/hierarchy"
 	"github.com/heybox/agent-monitor-server/internal/session"
-	"github.com/heybox/agent-monitor-hook/sdk"
 )
 
 type Handlers struct {
@@ -846,6 +846,37 @@ func (h *Handlers) resolveWorkspaceForSDK(w http.ResponseWriter, r *http.Request
 	return workspaceID, true
 }
 
+// resolveWorkspaceOrTopicForSDK resolves the effective workspace ID for an
+// agent session request. When topicID is non-zero it is the sole source of
+// truth: the workspace is derived from the topic via GetWorkspaceIDForTopic
+// and workspaceID is ignored entirely, so a client can never create a
+// mismatch between "the workspace I said" and "the topic I said" (design
+// doc §4.1). Falls back to resolveWorkspaceForSDK when topicID is zero,
+// preserving existing behavior exactly.
+func (h *Handlers) resolveWorkspaceOrTopicForSDK(w http.ResponseWriter, r *http.Request, workspaceID int64, topicID int64) (int64, bool) {
+	if topicID == 0 {
+		return h.resolveWorkspaceForSDK(w, r, workspaceID)
+	}
+	if h.hierStore == nil {
+		return 0, true
+	}
+	u := h.curUser(w, r)
+	if u == nil {
+		return 0, false
+	}
+	resolvedWorkspaceID, err := h.hierStore.GetWorkspaceIDForTopic(topicID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "topic not found"})
+		return 0, false
+	}
+	ok, _ := h.hierStore.CheckWorkspacePermission(u.ID, resolvedWorkspaceID, hierarchy.LevelWorkspaceViewer)
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access required"})
+		return 0, false
+	}
+	return resolvedWorkspaceID, true
+}
+
 func (h *Handlers) monitoredSessionKey(agentType sdk.AgentType, sessionID string) string {
 	return session.ComputeSessionKey(h.sessions.UserID(), h.sessions.DeviceID(), string(agentType), sessionID)
 }
@@ -897,12 +928,14 @@ func (h *Handlers) handleAgentCreateSession(w http.ResponseWriter, r *http.Reque
 		MaxTurns       int      `json:"max_turns"`
 		Title          string   `json:"title"`
 		WorkspaceID    int64    `json:"workspace_id"`
+		TopicID        int64    `json:"topic_id"`
+		StoryName      string   `json:"story_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	workspaceID, ok := h.resolveWorkspaceForSDK(w, r, req.WorkspaceID)
+	workspaceID, ok := h.resolveWorkspaceOrTopicForSDK(w, r, req.WorkspaceID, req.TopicID)
 	if !ok {
 		return
 	}
@@ -915,7 +948,7 @@ func (h *Handlers) handleAgentCreateSession(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	monitored, err := h.sessions.RegisterSDKSession(string(agentType), sess, workspaceID)
+	monitored, err := h.sessions.RegisterSDKSession(string(agentType), sess, workspaceID, req.TopicID, req.StoryName)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -957,6 +990,8 @@ func (h *Handlers) handleAgentSendPrompt(w http.ResponseWriter, r *http.Request)
 		SessionID      string `json:"session_id"`
 		TimeoutMinutes int    `json:"timeout_minutes"`
 		WorkspaceID    int64  `json:"workspace_id"`
+		TopicID        int64  `json:"topic_id"`
+		StoryName      string `json:"story_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
@@ -979,7 +1014,7 @@ func (h *Handlers) handleAgentSendPrompt(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	workspaceID, ok := h.resolveWorkspaceForSDK(w, r, req.WorkspaceID)
+	workspaceID, ok := h.resolveWorkspaceOrTopicForSDK(w, r, req.WorkspaceID, req.TopicID)
 	if !ok {
 		return
 	}
@@ -993,7 +1028,7 @@ func (h *Handlers) handleAgentSendPrompt(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		sessionID = sess.ID
-		monitored, err := h.sessions.RegisterSDKSession(string(agentType), sess, workspaceID)
+		monitored, err := h.sessions.RegisterSDKSession(string(agentType), sess, workspaceID, req.TopicID, req.StoryName)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1007,7 +1042,7 @@ func (h *Handlers) handleAgentSendPrompt(w http.ResponseWriter, r *http.Request)
 	} else {
 		sessionKey = h.monitoredSessionKey(agentType, sessionID)
 		if h.sessions.GetSession(sessionKey) == nil {
-			monitored, err := h.sessions.RegisterSDKSession(string(agentType), &sdk.Session{ID: sessionID, AgentType: agentType, CreatedAt: time.Now()}, workspaceID)
+			monitored, err := h.sessions.RegisterSDKSession(string(agentType), &sdk.Session{ID: sessionID, AgentType: agentType, CreatedAt: time.Now()}, workspaceID, req.TopicID, req.StoryName)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
