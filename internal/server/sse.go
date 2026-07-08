@@ -325,6 +325,45 @@ func (h *SSEHub) sendInitial(c *SSEClient) {
 	if payload := h.executionsPayload(); payload != nil {
 		c.writeJSON(payload)
 	}
+
+	// Agent registry snapshot
+	if payload := h.registryPayload(); payload != nil {
+		c.writeJSON(payload)
+	}
+}
+
+// registryPayload returns the agent_registry_snapshot event or nil if no registry store.
+func (h *SSEHub) registryPayload() map[string]interface{} {
+	if h.regStore == nil || h.sessions == nil {
+		return nil
+	}
+	rt, err := h.regStore.GetRuntimeByKey(h.sessions.UserID(), h.sessions.DeviceID())
+	if err != nil {
+		return nil
+	}
+	caps, _ := h.regStore.ListCapabilities(rt.ID)
+	if caps == nil {
+		caps = []registry.Capability{}
+	}
+	// Collect all profiles across all workspaces (filtered per-user later if needed)
+	var profiles []registry.AgentProfile
+	// For now send empty profiles; the frontend will fetch per-workspace
+	return map[string]interface{}{
+		"type":         "agent_registry_snapshot",
+		"runtime":      rt,
+		"capabilities": caps,
+		"profiles":     profiles,
+	}
+}
+
+// BroadcastRegistry sends registry updates to all SSE clients.
+func (h *SSEHub) BroadcastRegistry(eventType string, data interface{}) {
+	h.Notify(eventType, data)
+}
+
+// BroadcastStoryRun sends story run updates to all SSE clients.
+func (h *SSEHub) BroadcastStoryRun(eventType string, data interface{}) {
+	h.Notify(eventType, data)
 }
 
 // SSEClient is a single SSE connection. The writeMu mutex (invariant A)
