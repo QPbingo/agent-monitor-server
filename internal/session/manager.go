@@ -169,8 +169,7 @@ func (sm *SessionManager) RecordSDKMessage(key string, msg sdk.Message) bool {
 		sess.AgentOutput += msg.Content
 	}
 	if len(sess.Turns) > 0 {
-		idx := len(sess.Turns) - 1
-		sess.Turns[idx].Entries = append(sess.Turns[idx].Entries, TurnEntry{Event: "SDKMessage", TS: sess.LastEventTimeMs, Payload: msg.RawJSON})
+		sess.recordSDKToolCallOrGenericEntry(len(sess.Turns)-1, msg)
 	}
 	if sm.store != nil {
 		if err := sm.store.Upsert(sess); err != nil {
@@ -183,6 +182,56 @@ func (sm *SessionManager) RecordSDKMessage(key string, msg sdk.Message) bool {
 		}
 	}
 	return true
+}
+
+// recordSDKToolCallOrGenericEntry appends msg to the given turn, either as a
+// structured ToolCall — grouped the same way hook-driven PreToolUse/
+// PostToolUse events are (see addToolRunning/completeTool below) — or as a
+// generic SDKMessage entry for anything else. This is what lets SDK-driven
+// sessions render tool calls in the timeline the same way hook-driven
+// sessions already do.
+//
+// Known limitation: ClaudeSDK never emits a MessageTypeToolResult (Claude
+// Code's stream-json returns tool results as "user" messages, which
+// ClaudeSDK.parseMessage currently classifies as MessageTypeSystem and
+// ignores) — so a Claude tool call recorded here shows status "running"
+// indefinitely. Accepted gap: diff review reads git state directly and does
+// not depend on tool_result data (see plan Task 7 for the full rationale).
+func (s *Session) recordSDKToolCallOrGenericEntry(turnIdx int, msg sdk.Message) {
+	turn := &s.Turns[turnIdx]
+	ts := s.LastEventTimeMs
+	switch msg.Type {
+	case sdk.MessageTypeToolUse:
+		tc := ToolCall{Name: msg.ToolName, Input: msg.ToolInput, Status: "running", StartTS: ts}
+		var group *TurnEntry
+		for i := len(turn.Entries) - 1; i >= 0; i-- {
+			if len(turn.Entries[i].Tools) > 0 {
+				group = &turn.Entries[i]
+				break
+			}
+		}
+		if group == nil {
+			turn.Entries = append(turn.Entries, TurnEntry{Event: "SDKToolUse", Tools: []ToolCall{tc}, StartTS: ts})
+		} else {
+			group.Tools = append(group.Tools, tc)
+		}
+	case sdk.MessageTypeToolResult:
+		for i := len(turn.Entries) - 1; i >= 0; i-- {
+			entry := &turn.Entries[i]
+			for j := len(entry.Tools) - 1; j >= 0; j-- {
+				tc := &entry.Tools[j]
+				if tc.Status == "running" {
+					tc.Status = "completed"
+					tc.Output = msg.Content
+					tc.EndTS = ts
+					return
+				}
+			}
+		}
+		turn.Entries = append(turn.Entries, TurnEntry{Event: "SDKMessage", TS: ts, Payload: msg.RawJSON})
+	default:
+		turn.Entries = append(turn.Entries, TurnEntry{Event: "SDKMessage", TS: ts, Payload: msg.RawJSON})
+	}
 }
 
 func (sm *SessionManager) MarkSDKSessionIdle(key string) {

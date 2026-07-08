@@ -580,6 +580,72 @@ func TestRecordSDKMessageEmitsLiveOutputDelta(t *testing.T) {
 	}
 }
 
+func TestRecordSDKMessageToolUsePopulatesStructuredToolCall(t *testing.T) {
+	mgr, _, wsID := newSDKSessionManagerFixture(t)
+	monitored, err := mgr.RegisterSDKSession("codex", &sdk.Session{ID: "sdk-sid", AgentType: sdk.AgentCodex, CreatedAt: time.Now()}, wsID, 0, "")
+	if err != nil {
+		t.Fatalf("RegisterSDKSession: %v", err)
+	}
+	mgr.RecordSDKPrompt(monitored.SessionKey, "read a file")
+
+	if !mgr.RecordSDKMessage(monitored.SessionKey, sdk.Message{Type: sdk.MessageTypeToolUse, ToolName: "shell", ToolInput: `{"command":"cat foo.go"}`, Timestamp: time.Now()}) {
+		t.Fatalf("RecordSDKMessage returned false")
+	}
+
+	sess := mgr.GetSession(monitored.SessionKey)
+	if sess == nil || len(sess.Turns) != 1 {
+		t.Fatalf("session/turns missing: %+v", sess)
+	}
+	entries := sess.Turns[0].Entries
+	if len(entries) != 1 || len(entries[0].Tools) != 1 {
+		t.Fatalf("expected 1 entry with 1 tool, got %+v", entries)
+	}
+	tc := entries[0].Tools[0]
+	if tc.Name != "shell" || tc.Input != `{"command":"cat foo.go"}` || tc.Status != "running" {
+		t.Fatalf("tool call mismatch: %+v", tc)
+	}
+}
+
+func TestRecordSDKMessageToolResultCompletesMatchingToolCall(t *testing.T) {
+	mgr, _, wsID := newSDKSessionManagerFixture(t)
+	monitored, err := mgr.RegisterSDKSession("codex", &sdk.Session{ID: "sdk-sid", AgentType: sdk.AgentCodex, CreatedAt: time.Now()}, wsID, 0, "")
+	if err != nil {
+		t.Fatalf("RegisterSDKSession: %v", err)
+	}
+	mgr.RecordSDKPrompt(monitored.SessionKey, "read a file")
+	mgr.RecordSDKMessage(monitored.SessionKey, sdk.Message{Type: sdk.MessageTypeToolUse, ToolName: "shell", ToolInput: `{"command":"cat foo.go"}`, Timestamp: time.Now()})
+
+	if !mgr.RecordSDKMessage(monitored.SessionKey, sdk.Message{Type: sdk.MessageTypeToolResult, Content: "package main", Timestamp: time.Now()}) {
+		t.Fatalf("RecordSDKMessage returned false")
+	}
+
+	sess := mgr.GetSession(monitored.SessionKey)
+	tc := sess.Turns[0].Entries[0].Tools[0]
+	if tc.Status != "completed" || tc.Output != "package main" {
+		t.Fatalf("tool call not completed: %+v", tc)
+	}
+}
+
+func TestRecordSDKMessageMultipleToolUsesGroupUnderSameEntry(t *testing.T) {
+	mgr, _, wsID := newSDKSessionManagerFixture(t)
+	monitored, err := mgr.RegisterSDKSession("claude", &sdk.Session{ID: "sdk-sid", AgentType: sdk.AgentClaude, CreatedAt: time.Now()}, wsID, 0, "")
+	if err != nil {
+		t.Fatalf("RegisterSDKSession: %v", err)
+	}
+	mgr.RecordSDKPrompt(monitored.SessionKey, "read two files")
+	mgr.RecordSDKMessage(monitored.SessionKey, sdk.Message{Type: sdk.MessageTypeToolUse, ToolName: "Read", ToolInput: `{"file_path":"/a.go"}`, Timestamp: time.Now()})
+	mgr.RecordSDKMessage(monitored.SessionKey, sdk.Message{Type: sdk.MessageTypeToolUse, ToolName: "Read", ToolInput: `{"file_path":"/b.go"}`, Timestamp: time.Now()})
+
+	sess := mgr.GetSession(monitored.SessionKey)
+	entries := sess.Turns[0].Entries
+	if len(entries) != 1 || len(entries[0].Tools) != 2 {
+		t.Fatalf("expected 1 entry with 2 grouped tools, got %+v", entries)
+	}
+	if entries[0].Tools[0].Name != "Read" || entries[0].Tools[1].Name != "Read" {
+		t.Fatalf("tool names mismatch: %+v", entries[0].Tools)
+	}
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
