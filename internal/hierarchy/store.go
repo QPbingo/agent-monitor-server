@@ -2,15 +2,82 @@ package hierarchy
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrStoryAgentLocked is returned when trying to change a Story's agent
+// after the Story already has at least one run.
+var ErrStoryAgentLocked = errors.New("story agent is locked after first run")
 
 type Store struct {
 	db *sql.DB
 }
 
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
+
+// RunMigrations adds columns and schema changes that may not exist in older databases.
+// Errors from ALTER TABLE for columns that already exist are silently ignored.
+func (s *Store) RunMigrations() error {
+	// Topic orchestration_note
+	s.db.Exec(`ALTER TABLE topics ADD COLUMN orchestration_note TEXT NOT NULL DEFAULT ''`)
+
+	// Story new columns
+	s.db.Exec(`ALTER TABLE stories ADD COLUMN agent_profile_id INTEGER`)
+	s.db.Exec(`ALTER TABLE stories ADD COLUMN latest_run_id INTEGER`)
+	s.db.Exec(`ALTER TABLE stories ADD COLUMN latest_session_key TEXT NOT NULL DEFAULT ''`)
+
+	// Expand story status CHECK constraint via table rebuild.
+	s.migrateStoryStatusConstraint()
+
+	return nil
+}
+
+func (s *Store) migrateStoryStatusConstraint() {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='agent_profile_id'`).Scan(&count); err != nil || count == 0 {
+		return
+	}
+
+	_, err = tx.Exec(`
+		CREATE TABLE IF NOT EXISTS stories_new (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			topic_id          INTEGER NOT NULL REFERENCES topics(id),
+			name              TEXT NOT NULL,
+			description       TEXT NOT NULL DEFAULT '',
+			session_key       TEXT UNIQUE,
+			agent_profile_id  INTEGER,
+			latest_run_id     INTEGER,
+			latest_session_key TEXT NOT NULL DEFAULT '',
+			status            TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','running','completed','failed','cancelled','closed')),
+			created_at        INTEGER NOT NULL,
+			updated_at        INTEGER NOT NULL
+		);
+	`)
+	if err != nil {
+		return
+	}
+
+	_, err = tx.Exec(`
+		INSERT OR IGNORE INTO stories_new (id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, status, created_at, updated_at)
+		SELECT id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, status, created_at, updated_at FROM stories;
+		DROP TABLE stories;
+		ALTER TABLE stories_new RENAME TO stories;
+	`)
+	if err != nil {
+		tx.Exec(`DROP TABLE IF EXISTS stories_new`)
+		return
+	}
+
+	tx.Commit()
+}
 
 func (s *Store) EnsureTables() error {
 	_, err := s.db.Exec(`
@@ -37,19 +104,23 @@ func (s *Store) EnsureTables() error {
 			name        TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			agent_type  TEXT DEFAULT '',
+			orchestration_note TEXT NOT NULL DEFAULT '',
 			status      TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
 			created_at  INTEGER NOT NULL,
 			updated_at  INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS stories (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			topic_id    INTEGER NOT NULL REFERENCES topics(id),
-			name        TEXT NOT NULL,
-			description TEXT NOT NULL DEFAULT '',
-			session_key TEXT UNIQUE,
-			status      TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
-			created_at  INTEGER NOT NULL,
-			updated_at  INTEGER NOT NULL
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			topic_id          INTEGER NOT NULL REFERENCES topics(id),
+			name              TEXT NOT NULL,
+			description       TEXT NOT NULL DEFAULT '',
+			session_key       TEXT UNIQUE,
+			agent_profile_id  INTEGER,
+			latest_run_id     INTEGER,
+			latest_session_key TEXT NOT NULL DEFAULT '',
+			status            TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','running','completed','failed','cancelled','closed')),
+			created_at        INTEGER NOT NULL,
+			updated_at        INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS permissions (
 			id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -210,7 +281,7 @@ func (s *Store) DeleteProject(id int64) error {
 func (s *Store) CreateTopic(projectID int64, name, description, agentType string) (*Topic, error) {
 	now := time.Now().UnixMilli()
 	res, err := s.db.Exec(
-		`INSERT INTO topics (project_id, name, description, agent_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO topics (project_id, name, description, agent_type, orchestration_note, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)`,
 		projectID, name, description, agentType, now, now,
 	)
 	if err != nil {
@@ -223,8 +294,8 @@ func (s *Store) CreateTopic(projectID int64, name, description, agentType string
 func (s *Store) GetTopic(id int64) (*Topic, error) {
 	var t Topic
 	err := s.db.QueryRow(
-		`SELECT id, project_id, name, description, agent_type, status, created_at, updated_at FROM topics WHERE id = ?`, id,
-	).Scan(&t.ID, &t.ProjectID, &t.Name, &t.Description, &t.AgentType, &t.Status, &t.CreatedAt, &t.UpdatedAt)
+		`SELECT id, project_id, name, description, agent_type, COALESCE(orchestration_note,''), status, created_at, updated_at FROM topics WHERE id = ?`, id,
+	).Scan(&t.ID, &t.ProjectID, &t.Name, &t.Description, &t.AgentType, &t.OrchestrationNote, &t.Status, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +304,7 @@ func (s *Store) GetTopic(id int64) (*Topic, error) {
 
 func (s *Store) ListTopics(projectID int64) ([]Topic, error) {
 	rows, err := s.db.Query(
-		`SELECT id, project_id, name, description, agent_type, status, created_at, updated_at FROM topics WHERE project_id=? ORDER BY id`,
+		`SELECT id, project_id, name, description, agent_type, COALESCE(orchestration_note,''), status, created_at, updated_at FROM topics WHERE project_id=? ORDER BY id`,
 		projectID,
 	)
 	if err != nil {
@@ -243,7 +314,7 @@ func (s *Store) ListTopics(projectID int64) ([]Topic, error) {
 	var list []Topic
 	for rows.Next() {
 		var t Topic
-		if err := rows.Scan(&t.ID, &t.ProjectID, &t.Name, &t.Description, &t.AgentType, &t.Status, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.ProjectID, &t.Name, &t.Description, &t.AgentType, &t.OrchestrationNote, &t.Status, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, t)
@@ -254,9 +325,9 @@ func (s *Store) ListTopics(projectID int64) ([]Topic, error) {
 func (s *Store) FindTopicByAgentType(projectID int64, agentType string) (*Topic, error) {
 	var t Topic
 	err := s.db.QueryRow(
-		`SELECT id, project_id, name, description, agent_type, status, created_at, updated_at FROM topics WHERE project_id=? AND agent_type=?`,
+		`SELECT id, project_id, name, description, agent_type, COALESCE(orchestration_note,''), status, created_at, updated_at FROM topics WHERE project_id=? AND agent_type=?`,
 		projectID, agentType,
-	).Scan(&t.ID, &t.ProjectID, &t.Name, &t.Description, &t.AgentType, &t.Status, &t.CreatedAt, &t.UpdatedAt)
+	).Scan(&t.ID, &t.ProjectID, &t.Name, &t.Description, &t.AgentType, &t.OrchestrationNote, &t.Status, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -267,6 +338,15 @@ func (s *Store) UpdateTopic(id int64, name, description string) error {
 	_, err := s.db.Exec(
 		`UPDATE topics SET name=?, description=?, updated_at=? WHERE id=?`,
 		name, description, time.Now().UnixMilli(), id,
+	)
+	return err
+}
+
+// UpdateTopicOrchestrationNote updates only the orchestration_note field.
+func (s *Store) UpdateTopicOrchestrationNote(id int64, note string) error {
+	_, err := s.db.Exec(
+		`UPDATE topics SET orchestration_note=?, updated_at=? WHERE id=?`,
+		note, time.Now().UnixMilli(), id,
 	)
 	return err
 }
@@ -302,21 +382,30 @@ func (s *Store) CreateStory(topicID int64, name, description string) (*Story, er
 func (s *Store) GetStory(id int64) (*Story, error) {
 	var st Story
 	var sessionKey sql.NullString
+	var agentProfileID, latestRunID sql.NullInt64
+	var latestSessKey string
 	err := s.db.QueryRow(
-		`SELECT id, topic_id, name, description, session_key, status, created_at, updated_at FROM stories WHERE id = ?`, id,
-	).Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &sessionKey, &st.Status, &st.CreatedAt, &st.UpdatedAt)
+		`SELECT id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, status, created_at, updated_at FROM stories WHERE id = ?`, id,
+	).Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &sessionKey, &agentProfileID, &latestRunID, &latestSessKey, &st.Status, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	if sessionKey.Valid {
 		st.SessionKey = sessionKey.String
 	}
+	if agentProfileID.Valid {
+		st.AgentProfileID = &agentProfileID.Int64
+	}
+	if latestRunID.Valid {
+		st.LatestRunID = &latestRunID.Int64
+	}
+	st.LatestSessionKey = latestSessKey
 	return &st, nil
 }
 
 func (s *Store) ListStories(topicID int64) ([]Story, error) {
 	rows, err := s.db.Query(
-		`SELECT id, topic_id, name, description, COALESCE(session_key,''), status, created_at, updated_at FROM stories WHERE topic_id=? ORDER BY id`,
+		`SELECT id, topic_id, name, description, COALESCE(session_key,''), agent_profile_id, latest_run_id, COALESCE(latest_session_key,''), status, created_at, updated_at FROM stories WHERE topic_id=? ORDER BY id`,
 		topicID,
 	)
 	if err != nil {
@@ -326,8 +415,15 @@ func (s *Store) ListStories(topicID int64) ([]Story, error) {
 	var list []Story
 	for rows.Next() {
 		var st Story
-		if err := rows.Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &st.SessionKey, &st.Status, &st.CreatedAt, &st.UpdatedAt); err != nil {
+		var agentProfileID, latestRunID sql.NullInt64
+		if err := rows.Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &st.SessionKey, &agentProfileID, &latestRunID, &st.LatestSessionKey, &st.Status, &st.CreatedAt, &st.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if agentProfileID.Valid {
+			st.AgentProfileID = &agentProfileID.Int64
+		}
+		if latestRunID.Valid {
+			st.LatestRunID = &latestRunID.Int64
 		}
 		list = append(list, st)
 	}
@@ -383,6 +479,55 @@ func (s *Store) DeleteStory(id int64) error {
 	return err
 }
 
+// ── Story Agent Binding ──
+
+// StoryHasRuns returns true if the story has any story_runs (i.e., agent is locked).
+func (s *Store) StoryHasRuns(storyID int64) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM story_runs WHERE story_id = ?`, storyID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("story has runs: %w", err)
+	}
+	return count > 0, nil
+}
+
+// BindAgentToStory sets the agent_profile_id on a story.
+// Returns ErrStoryAgentLocked if the story already has runs with a different agent.
+func (s *Store) BindAgentToStory(storyID, agentProfileID int64) error {
+	hasRuns, err := s.StoryHasRuns(storyID)
+	if err != nil {
+		return err
+	}
+
+	if hasRuns {
+		// Check current agent_profile_id
+		var current sql.NullInt64
+		if err := s.db.QueryRow(`SELECT agent_profile_id FROM stories WHERE id = ?`, storyID).Scan(&current); err != nil {
+			return fmt.Errorf("get current agent: %w", err)
+		}
+		if current.Valid && current.Int64 != agentProfileID {
+			return ErrStoryAgentLocked
+		}
+	}
+
+	now := time.Now().UnixMilli()
+	_, err = s.db.Exec(
+		`UPDATE stories SET agent_profile_id=?, updated_at=? WHERE id=?`,
+		agentProfileID, now, storyID,
+	)
+	return err
+}
+
+// UpdateStoryRunSummary updates the latest run/session summary on a Story.
+func (s *Store) UpdateStoryRunSummary(storyID int64, runID int64, sessionKey, status string) error {
+	now := time.Now().UnixMilli()
+	_, err := s.db.Exec(
+		`UPDATE stories SET latest_run_id=?, latest_session_key=?, status=?, updated_at=? WHERE id=?`,
+		runID, sessionKey, status, now, storyID,
+	)
+	return err
+}
+
 // GetWorkspaceIDForTopic resolves a topic's owning workspace, so callers can
 // verify a client-supplied topic_id actually belongs to a workspace the
 // caller has permission on — existence of the topic alone is not enough.
@@ -394,6 +539,22 @@ func (s *Store) GetWorkspaceIDForTopic(topicID int64) (int64, error) {
 		JOIN projects p ON p.id = t.project_id
 		WHERE t.id = ?
 	`, topicID).Scan(&workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return workspaceID, nil
+}
+
+// GetWorkspaceIDForStory resolves a story's owning workspace.
+func (s *Store) GetWorkspaceIDForStory(storyID int64) (int64, error) {
+	var workspaceID int64
+	err := s.db.QueryRow(`
+		SELECT p.workspace_id
+		FROM stories st
+		JOIN topics t ON t.id = st.topic_id
+		JOIN projects p ON p.id = t.project_id
+		WHERE st.id = ?
+	`, storyID).Scan(&workspaceID)
 	if err != nil {
 		return 0, err
 	}
@@ -469,16 +630,25 @@ func (s *Store) EnsureWorkspaceInspiration(workspaceID int64) (*Project, error) 
 func (s *Store) FindStoryBySessionKey(sessionKey string) (*Story, error) {
 	var st Story
 	var sessionKeyStr sql.NullString
+	var agentProfileID, latestRunID sql.NullInt64
+	var latestSessKey string
 	err := s.db.QueryRow(
-		`SELECT id, topic_id, name, description, COALESCE(session_key,''), status, created_at, updated_at FROM stories WHERE session_key=?`,
+		`SELECT id, topic_id, name, description, COALESCE(session_key,''), agent_profile_id, latest_run_id, COALESCE(latest_session_key,''), status, created_at, updated_at FROM stories WHERE session_key=?`,
 		sessionKey,
-	).Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &sessionKeyStr, &st.Status, &st.CreatedAt, &st.UpdatedAt)
+	).Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &sessionKeyStr, &agentProfileID, &latestRunID, &latestSessKey, &st.Status, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	if sessionKeyStr.Valid {
 		st.SessionKey = sessionKeyStr.String
 	}
+	if agentProfileID.Valid {
+		st.AgentProfileID = &agentProfileID.Int64
+	}
+	if latestRunID.Valid {
+		st.LatestRunID = &latestRunID.Int64
+	}
+	st.LatestSessionKey = latestSessKey
 	return &st, nil
 }
 

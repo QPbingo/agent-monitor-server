@@ -348,3 +348,71 @@ func sessionSource(sess *Session) string {
 	}
 	return sess.Source
 }
+
+// FindReusableSDKSessionForStory finds the latest usable SDK session for a story.
+// It orders by last_event_time_ms DESC and excludes terminal statuses
+// (error, stopped, disappeared, unknown).
+func (s *Store) FindReusableSDKSessionForStory(storyID int64) (*Session, error) {
+	rows, err := s.db.Query(`
+		SELECT user_id, device_id, agent_type, agent_session_id, session_key,
+			pid, terminal, cwd, status, start_time_ms,
+			last_event_time_ms, last_event_type, last_file, last_command,
+			user_input, agent_output, session_title, payload, last_hook_event,
+			memory_mb, cpu_percent, turn_count, turns, git_branch,
+			story_id, source, created_at, updated_at
+		FROM daemon_sessions
+		WHERE story_id = ? AND source = 'sdk'
+			AND status NOT IN ('error', 'stopped', 'disappeared', 'unknown')
+		ORDER BY last_event_time_ms DESC
+		LIMIT 1
+	`, storyID)
+	if err != nil {
+		return nil, fmt.Errorf("find reusable sdk session: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, nil // no reusable session found
+	}
+
+	var sess Session
+	var userInput, agentOutput, sessionTitle, payload, lastHookEvent, turnsJSON string
+	var storyIDNull sql.NullInt64
+	if err := rows.Scan(
+		&sess.UserID, &sess.DeviceID, &sess.AgentType, &sess.AgentSessionID, &sess.SessionKey,
+		&sess.PID, &sess.Terminal, &sess.CWD, &sess.Status, &sess.StartTimeMs,
+		&sess.LastEventTimeMs, &sess.LastEventType, &sess.LastFile, &sess.LastCommand,
+		&userInput, &agentOutput, &sessionTitle, &payload, &lastHookEvent,
+		&sess.MemoryMB, &sess.CPUPercent, &sess.TurnCount, &turnsJSON, &sess.GitBranch,
+		&storyIDNull, &sess.Source, new(int64), new(int64),
+	); err != nil {
+		return nil, fmt.Errorf("scan reusable session: %w", err)
+	}
+	if storyIDNull.Valid {
+		sess.StoryID = &storyIDNull.Int64
+	}
+	sess.UserInput = userInput
+	sess.AgentOutput = agentOutput
+	sess.SessionTitle = sessionTitle
+	sess.LastHookEvent = lastHookEvent
+	if payload != "" {
+		sess.Payload = []byte(payload)
+	}
+	if turnsJSON != "" && turnsJSON != "[]" {
+		json.Unmarshal([]byte(turnsJSON), &sess.Turns)
+	}
+	sess.lastHookTime = sess.LastEventTimeMs
+	if sess.Source == "" {
+		sess.Source = "hook"
+	}
+	return &sess, nil
+}
+
+// RegisterSDKSessionForStory binds a daemon session to a story by setting story_id.
+func (s *Store) RegisterSDKSessionForStory(userID, deviceID, agentType, agentSessionID string, storyID int64) error {
+	_, err := s.db.Exec(`
+		UPDATE daemon_sessions SET story_id = ?, updated_at = ?
+		WHERE user_id = ? AND device_id = ? AND agent_type = ? AND agent_session_id = ?
+	`, storyID, time.Now().UnixMilli(), userID, deviceID, agentType, agentSessionID)
+	return err
+}
