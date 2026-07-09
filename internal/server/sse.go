@@ -127,7 +127,9 @@ func (h *SSEHub) Notify(eventType string, data interface{}) {
 	case "hierarchy_updated":
 		event = scopedSSEEvent{kind: eventType}
 	default:
-		return
+		// Generic events: agent_registry_snapshot, agent_profile_updated,
+		// story_run_started, story_run_updated, etc.
+		event = scopedSSEEvent{kind: eventType, data: data}
 	}
 	select {
 	case h.broadcast <- event:

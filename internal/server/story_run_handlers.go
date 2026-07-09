@@ -428,7 +428,10 @@ func (h *Handlers) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		h.agentMgr.CancelExecution(ctx, agentType, run.AgentSessionID)
+		if err := h.agentMgr.CancelExecution(ctx, agentType, run.AgentSessionID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 
 		// Mark session stopped
 		sessionKey := h.monitoredSessionKey(agentType, run.AgentSessionID)
@@ -472,7 +475,7 @@ func resolveCWD(runCWD, profileCWD string, workspaceID int64) string {
 	if err != nil {
 		return ""
 	}
-	_ = os.MkdirAll(filepath.Join(home, ".agent-monitor", "workspaces", fmt.Sprintf("%d", workspaceID)), 0700)
+	os.MkdirAll(filepath.Join(home, ".agent-monitor", "workspaces", fmt.Sprintf("%d", workspaceID)), 0700)
 	return filepath.Join(home, ".agent-monitor", "workspaces", fmt.Sprintf("%d", workspaceID))
 }
 

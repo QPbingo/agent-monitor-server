@@ -99,7 +99,8 @@ func (s *Store) EnsureTables() error {
 			created_by       INTEGER NOT NULL,
 			created_at       INTEGER NOT NULL,
 			started_at       INTEGER NOT NULL DEFAULT 0,
-			finished_at      INTEGER NOT NULL DEFAULT 0
+			finished_at      INTEGER NOT NULL DEFAULT 0,
+			updated_at       INTEGER NOT NULL DEFAULT 0
 		);
 	`)
 	return err
