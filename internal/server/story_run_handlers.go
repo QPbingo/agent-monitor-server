@@ -31,10 +31,11 @@ func (h *Handlers) handleBindAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wid, err := h.hierStore.GetWorkspaceIDForStory(storyID)
-	if err != nil || !h.checkWSAdmin(w, r, wid) {
-		if err == nil {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin access required"})
-		}
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "story workspace not found"})
+		return
+	}
+	if !h.checkWSAdmin(w, r, wid) {
 		return
 	}
 
@@ -96,10 +97,11 @@ func (h *Handlers) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wid, err := h.hierStore.GetWorkspaceIDForStory(storyID)
-	if err != nil || !h.checkWSAdmin(w, r, wid) {
-		if err == nil {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin access required"})
-		}
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "story workspace not found"})
+		return
+	}
+	if !h.checkWSAdmin(w, r, wid) {
 		return
 	}
 
@@ -340,10 +342,11 @@ func (h *Handlers) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wid, err := h.hierStore.GetWorkspaceIDForStory(storyID)
-	if err != nil || !h.checkWSViewer(w, r, wid) {
-		if err == nil {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "viewer access required"})
-		}
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "story workspace not found"})
+		return
+	}
+	if !h.checkWSViewer(w, r, wid) {
 		return
 	}
 
@@ -372,10 +375,11 @@ func (h *Handlers) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wid, err := h.hierStore.GetWorkspaceIDForStory(storyID)
-	if err != nil || !h.checkWSAdmin(w, r, wid) {
-		if err == nil {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin access required"})
-		}
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "story workspace not found"})
+		return
+	}
+	if !h.checkWSAdmin(w, r, wid) {
 		return
 	}
 
