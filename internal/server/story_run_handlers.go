@@ -167,7 +167,6 @@ func (h *Handlers) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		Prompt         string `json:"prompt"`
 		PermissionMode string `json:"permission_mode"`
 		Cwd            string `json:"cwd"`
-		NewSession     bool   `json:"new_session"`
 		SessionTitle   string `json:"session_title"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -175,13 +174,13 @@ func (h *Handlers) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve prompt: user override > story description
+	// Resolve prompt: user override > story description > story name
 	prompt := req.Prompt
 	if prompt == "" {
 		prompt = story.Description
 	}
 	if prompt == "" {
-		prompt = "Complete the task as described."
+		prompt = story.Name
 	}
 
 	// Resolve effective prompt
@@ -232,7 +231,7 @@ func (h *Handlers) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve session: new or reuse
+	// Resolve session: reuse existing or create first one
 	var sessionID, sessionKey, execID string
 	agentType := sdk.AgentType(profile.Provider)
 
@@ -245,8 +244,24 @@ func (h *Handlers) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.NewSession {
-		// Force new session
+	// Try to reuse existing story session, or create the first one
+	reusable, _ := h.sessions.Store().FindReusableSDKSessionForStory(storyID)
+	if reusable != nil {
+		// Resume existing session — no fallback to create a replacement
+		sess, err := h.agentMgr.ResumeSession(r.Context(), agentType, reusable.AgentSessionID)
+		if err != nil {
+			h.regStore.UpdateRunStatus(run.ID, registry.RunFailed, err.Error(), 0)
+			h.hierStore.UpdateStoryRunSummary(storyID, run.ID, reusable.SessionKey, "failed")
+			h.broadcastStoryRunUpdated(run.ID)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": "story conversation cannot be resumed; create another story",
+			})
+			return
+		}
+		sessionID = sess.ID
+		sessionKey = reusable.SessionKey
+	} else {
+		// Create first session for this story
 		sess, err := h.agentMgr.CreateSession(r.Context(), agentType, sdk.SessionOptions{
 			Title: sessionTitle,
 			CWD:   cwd,
@@ -259,7 +274,6 @@ func (h *Handlers) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sessionID = sess.ID
-		// Register as monitored session and bind to story
 		monitored, err := h.sessions.RegisterSDKSession(string(agentType), sess, wid, 0, story.Name)
 		if err != nil {
 			h.regStore.UpdateRunStatus(run.ID, registry.RunFailed, err.Error(), 0)
@@ -267,51 +281,10 @@ func (h *Handlers) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sessionKey = monitored.SessionKey
-		// Bind session to story
 		h.sessions.Store().RegisterSDKSessionForStory(
 			h.sessions.UserID(), h.sessions.DeviceID(),
 			string(agentType), sessionID, storyID,
 		)
-	} else {
-		// Try to reuse latest usable session
-		reusable, _ := h.sessions.Store().FindReusableSDKSessionForStory(storyID)
-		if reusable != nil {
-			// Resume existing session
-			sess, err := h.agentMgr.ResumeSession(r.Context(), agentType, reusable.AgentSessionID)
-			if err != nil {
-				// Fall through to create new
-				reusable = nil
-			} else {
-				sessionID = sess.ID
-				sessionKey = reusable.SessionKey
-			}
-		}
-		if reusable == nil {
-			// Create new session
-			sess, err := h.agentMgr.CreateSession(r.Context(), agentType, sdk.SessionOptions{
-				Title: sessionTitle,
-				CWD:   cwd,
-			})
-			if err != nil {
-				h.regStore.UpdateRunStatus(run.ID, registry.RunFailed, err.Error(), 0)
-				h.hierStore.UpdateStoryRunSummary(storyID, run.ID, "", "failed")
-				h.broadcastStoryRunUpdated(run.ID)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
-			}
-			sessionID = sess.ID
-			monitored, err := h.sessions.RegisterSDKSession(string(agentType), sess, wid, 0, story.Name)
-			if err != nil {
-				h.regStore.UpdateRunStatus(run.ID, registry.RunFailed, err.Error(), 0)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
-			}
-			sessionKey = monitored.SessionKey
-			h.sessions.Store().RegisterSDKSessionForStory(
-				h.sessions.UserID(), h.sessions.DeviceID(),
-				string(agentType), sessionID, storyID,
-			)
-		}
 	}
 
 	// Update run with session info and set to running
