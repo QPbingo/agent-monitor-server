@@ -471,10 +471,10 @@ func (s *Store) GetProjectIDForSessionKey(sessionKey string) (int64, error) {
 	return projectID, nil
 }
 
-func (s *Store) UpdateStory(id int64, name, description, status string) error {
+func (s *Store) UpdateStory(id int64, name, description string) error {
 	_, err := s.db.Exec(
-		`UPDATE stories SET name=?, description=?, status=?, updated_at=? WHERE id=?`,
-		name, description, status, time.Now().UnixMilli(), id,
+		`UPDATE stories SET name=?, description=?, updated_at=? WHERE id=?`,
+		name, description, time.Now().UnixMilli(), id,
 	)
 	return err
 }

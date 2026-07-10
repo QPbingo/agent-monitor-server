@@ -203,7 +203,7 @@ func TestUpdateStoryRunSummaryDoesNotOverwriteStoryStatus(t *testing.T) {
 	s := newTestStore(t)
 	story := createTestStory(t, s)
 
-	if err := s.UpdateStory(story.ID, "Story", "desc", "in_progress"); err != nil {
+	if _, err := s.db.Exec("UPDATE stories SET status='in_progress' WHERE id=?", story.ID); err != nil {
 		t.Fatalf("UpdateStory: %v", err)
 	}
 	if err := s.UpdateStoryRunSummary(story.ID, 99, "sess-abc", "running"); err != nil {
