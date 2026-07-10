@@ -36,6 +36,17 @@ func (h *Handlers) handleScanCapabilities(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	var req struct {
+		WorkspaceID int64 `json:"workspace_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if req.WorkspaceID > 0 {
+		if !h.checkWSAdmin(w, r, req.WorkspaceID) {
+			return
+		}
+	}
+
 	rt, err := h.regStore.EnsureRuntime(h.sessions.UserID(), h.sessions.DeviceID(), "", "")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -49,15 +60,34 @@ func (h *Handlers) handleScanCapabilities(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	resp := map[string]interface{}{
+		"runtime":      rt,
+		"capabilities": caps,
+	}
+
+	// Seed default agents if a workspace was specified
+	if req.WorkspaceID > 0 {
+		agents, err := h.regStore.SeedDefaultAgentsForWorkspace(h.sessions.UserID(), req.WorkspaceID, rt.ID, u.ID, caps)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		resp["agents"] = agents
+
+		// Broadcast profile updates for each seeded agent
+		if h.sseHub != nil {
+			for _, a := range agents {
+				h.sseHub.Notify("agent_profile_updated", a)
+			}
+		}
+	}
+
 	// Broadcast capabilities update
 	if h.sseHub != nil {
 		h.sseHub.Notify("agent_capabilities_updated", caps)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"runtime":      rt,
-		"capabilities": caps,
-	})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleListCapabilities returns capabilities for the current runtime.

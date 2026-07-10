@@ -418,6 +418,86 @@ func (s *Store) ListProfilesForWorkspace(workspaceID int64) ([]AgentProfile, err
 	return profiles, rows.Err()
 }
 
+// ── Default Agent Seeding ──
+
+func defaultAgentName(provider Provider) string {
+	switch provider {
+	case ProviderClaude:
+		return "Claude Default"
+	case ProviderCodex:
+		return "Codex Default"
+	case ProviderOpenCode:
+		return "OpenCode Default"
+	default:
+		return string(provider) + " Default"
+	}
+}
+
+// SeedDefaultAgentsForWorkspace creates default agent profiles for available
+// capabilities in a workspace. It is idempotent — calling it twice with the
+// same inputs returns the same profiles without duplication.
+func (s *Store) SeedDefaultAgentsForWorkspace(userID string, workspaceID, runtimeID, createdBy int64, caps []Capability) ([]AgentProfile, error) {
+	var profiles []AgentProfile
+
+	for _, cap := range caps {
+		if !cap.Available {
+			continue
+		}
+
+		name := defaultAgentName(cap.Provider)
+
+		// Check for an existing default agent for this workspace/runtime/provider/name
+		existing, err := s.findDefaultAgent(workspaceID, runtimeID, cap.Provider, name)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			profiles = append(profiles, *existing)
+			continue
+		}
+
+		// Create a new default agent profile
+		input := ProfileInput{
+			UserID:      userID,
+			WorkspaceID: workspaceID,
+			RuntimeID:   runtimeID,
+			Provider:    cap.Provider,
+			Name:        name,
+			Description: "Default " + string(cap.Provider) + " agent for this workspace",
+			CreatedBy:   createdBy,
+		}
+		profile, err := s.CreateProfile(input)
+		if err != nil {
+			return nil, fmt.Errorf("seed default agent for %s: %w", cap.Provider, err)
+		}
+		profiles = append(profiles, *profile)
+	}
+
+	return profiles, nil
+}
+
+// findDefaultAgent looks for an existing active or disabled profile matching
+// (workspace_id, runtime_id, provider, name). Returns nil if none found.
+func (s *Store) findDefaultAgent(workspaceID, runtimeID int64, provider Provider, name string) (*AgentProfile, error) {
+	p := &AgentProfile{}
+	err := s.db.QueryRow(`
+		SELECT id, user_id, workspace_id, runtime_id, provider, name, description, default_cwd, model, permission_mode, system_prompt, status, created_by, created_at, updated_at
+		FROM agent_profiles
+		WHERE workspace_id = ? AND runtime_id = ? AND provider = ? AND name = ?
+	`, workspaceID, runtimeID, string(provider), name).Scan(
+		&p.ID, &p.UserID, &p.WorkspaceID, &p.RuntimeID, &p.Provider,
+		&p.Name, &p.Description, &p.DefaultCwd, &p.Model, &p.PermissionMode,
+		&p.SystemPrompt, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find default agent: %w", err)
+	}
+	return p, nil
+}
+
 // ── StoryRun ──
 
 func (s *Store) CreateRun(input StoryRunInput) (*StoryRun, error) {

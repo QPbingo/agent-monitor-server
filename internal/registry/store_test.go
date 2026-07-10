@@ -7,6 +7,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func mustRuntime(t *testing.T, store *Store, userID, deviceID string) *Runtime {
+	t.Helper()
+	rt, err := store.EnsureRuntime(userID, deviceID, "test-host", "/tmp/test")
+	if err != nil {
+		t.Fatalf("mustRuntime: %v", err)
+	}
+	return rt
+}
+
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:?_journal_mode=WAL")
@@ -150,6 +159,47 @@ func TestUpsertCapabilityReplacesProviderForRuntime(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Errorf("expected 2 capabilities, got %d", len(list))
+	}
+}
+
+func TestSeedDefaultAgentsForWorkspaceIsIdempotent(t *testing.T) {
+	store := newTestStore(t)
+	rt := mustRuntime(t, store, "user-1", "device-1")
+	cap := Capability{
+		RuntimeID:     rt.ID,
+		Provider:      ProviderClaude,
+		BinaryPath:    "/usr/local/bin/claude",
+		Version:       "1.0.0",
+		Available:     true,
+		AuthStatus:    AuthAuthenticated,
+		HookInstalled: true,
+		HookStatus:    "ok",
+	}
+	upserted, err := store.UpsertCapability(cap)
+	if err != nil {
+		t.Fatalf("UpsertCapability: %v", err)
+	}
+
+	first, err := store.SeedDefaultAgentsForWorkspace("user-1", 10, rt.ID, 7, []Capability{*upserted})
+	if err != nil {
+		t.Fatalf("first seed: %v", err)
+	}
+	second, err := store.SeedDefaultAgentsForWorkspace("user-1", 10, rt.ID, 7, []Capability{*upserted})
+	if err != nil {
+		t.Fatalf("second seed: %v", err)
+	}
+
+	if len(first) != 1 {
+		t.Fatalf("first seed created %d agents, want 1", len(first))
+	}
+	if len(second) != 1 {
+		t.Fatalf("second seed returned %d agents, want 1 existing agent", len(second))
+	}
+	if first[0].ID != second[0].ID {
+		t.Fatalf("seed duplicated agent: first=%d second=%d", first[0].ID, second[0].ID)
+	}
+	if first[0].Name != "Claude Default" {
+		t.Fatalf("name = %q, want Claude Default", first[0].Name)
 	}
 }
 
