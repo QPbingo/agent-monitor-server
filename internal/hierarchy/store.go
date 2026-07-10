@@ -27,6 +27,7 @@ func (s *Store) RunMigrations() error {
 	s.db.Exec(`ALTER TABLE stories ADD COLUMN agent_profile_id INTEGER`)
 	s.db.Exec(`ALTER TABLE stories ADD COLUMN latest_run_id INTEGER`)
 	s.db.Exec(`ALTER TABLE stories ADD COLUMN latest_session_key TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE stories ADD COLUMN latest_run_status TEXT NOT NULL DEFAULT ''`)
 
 	// Expand story status CHECK constraint via table rebuild.
 	s.migrateStoryStatusConstraint()
@@ -56,7 +57,8 @@ func (s *Store) migrateStoryStatusConstraint() {
 			agent_profile_id  INTEGER,
 			latest_run_id     INTEGER,
 			latest_session_key TEXT NOT NULL DEFAULT '',
-			status            TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','running','completed','failed','cancelled','closed')),
+			latest_run_status  TEXT NOT NULL DEFAULT '',
+			status            TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','in_progress','running','completed','failed','cancelled','closed')),
 			created_at        INTEGER NOT NULL,
 			updated_at        INTEGER NOT NULL
 		);
@@ -66,8 +68,8 @@ func (s *Store) migrateStoryStatusConstraint() {
 	}
 
 	_, err = tx.Exec(`
-		INSERT OR IGNORE INTO stories_new (id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, status, created_at, updated_at)
-		SELECT id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, status, created_at, updated_at FROM stories;
+		INSERT OR IGNORE INTO stories_new (id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, latest_run_status, status, created_at, updated_at)
+		SELECT id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, latest_run_status, status, created_at, updated_at FROM stories;
 		DROP TABLE stories;
 		ALTER TABLE stories_new RENAME TO stories;
 	`)
@@ -118,7 +120,8 @@ func (s *Store) EnsureTables() error {
 			agent_profile_id  INTEGER,
 			latest_run_id     INTEGER,
 			latest_session_key TEXT NOT NULL DEFAULT '',
-			status            TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','running','completed','failed','cancelled','closed')),
+			latest_run_status  TEXT NOT NULL DEFAULT '',
+			status            TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','in_progress','running','completed','failed','cancelled','closed')),
 			created_at        INTEGER NOT NULL,
 			updated_at        INTEGER NOT NULL
 		);
@@ -384,9 +387,10 @@ func (s *Store) GetStory(id int64) (*Story, error) {
 	var sessionKey sql.NullString
 	var agentProfileID, latestRunID sql.NullInt64
 	var latestSessKey string
+	var latestRunStatus string
 	err := s.db.QueryRow(
-		`SELECT id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, status, created_at, updated_at FROM stories WHERE id = ?`, id,
-	).Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &sessionKey, &agentProfileID, &latestRunID, &latestSessKey, &st.Status, &st.CreatedAt, &st.UpdatedAt)
+		`SELECT id, topic_id, name, description, session_key, agent_profile_id, latest_run_id, latest_session_key, COALESCE(latest_run_status,''), status, created_at, updated_at FROM stories WHERE id = ?`, id,
+	).Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &sessionKey, &agentProfileID, &latestRunID, &latestSessKey, &latestRunStatus, &st.Status, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -400,12 +404,13 @@ func (s *Store) GetStory(id int64) (*Story, error) {
 		st.LatestRunID = &latestRunID.Int64
 	}
 	st.LatestSessionKey = latestSessKey
+	st.LatestRunStatus = latestRunStatus
 	return &st, nil
 }
 
 func (s *Store) ListStories(topicID int64) ([]Story, error) {
 	rows, err := s.db.Query(
-		`SELECT id, topic_id, name, description, COALESCE(session_key,''), agent_profile_id, latest_run_id, COALESCE(latest_session_key,''), status, created_at, updated_at FROM stories WHERE topic_id=? ORDER BY id`,
+		`SELECT id, topic_id, name, description, COALESCE(session_key,''), agent_profile_id, latest_run_id, COALESCE(latest_session_key,''), COALESCE(latest_run_status,''), status, created_at, updated_at FROM stories WHERE topic_id=? ORDER BY id`,
 		topicID,
 	)
 	if err != nil {
@@ -416,7 +421,7 @@ func (s *Store) ListStories(topicID int64) ([]Story, error) {
 	for rows.Next() {
 		var st Story
 		var agentProfileID, latestRunID sql.NullInt64
-		if err := rows.Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &st.SessionKey, &agentProfileID, &latestRunID, &st.LatestSessionKey, &st.Status, &st.CreatedAt, &st.UpdatedAt); err != nil {
+		if err := rows.Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &st.SessionKey, &agentProfileID, &latestRunID, &st.LatestSessionKey, &st.LatestRunStatus, &st.Status, &st.CreatedAt, &st.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if agentProfileID.Valid {
@@ -466,10 +471,10 @@ func (s *Store) GetProjectIDForSessionKey(sessionKey string) (int64, error) {
 	return projectID, nil
 }
 
-func (s *Store) UpdateStory(id int64, name, description string) error {
+func (s *Store) UpdateStory(id int64, name, description, status string) error {
 	_, err := s.db.Exec(
-		`UPDATE stories SET name=?, description=?, updated_at=? WHERE id=?`,
-		name, description, time.Now().UnixMilli(), id,
+		`UPDATE stories SET name=?, description=?, status=?, updated_at=? WHERE id=?`,
+		name, description, status, time.Now().UnixMilli(), id,
 	)
 	return err
 }
@@ -522,7 +527,7 @@ func (s *Store) BindAgentToStory(storyID, agentProfileID int64) error {
 func (s *Store) UpdateStoryRunSummary(storyID int64, runID int64, sessionKey, status string) error {
 	now := time.Now().UnixMilli()
 	_, err := s.db.Exec(
-		`UPDATE stories SET latest_run_id=?, latest_session_key=?, status=?, updated_at=? WHERE id=?`,
+		`UPDATE stories SET latest_run_id=?, latest_session_key=?, latest_run_status=?, updated_at=? WHERE id=?`,
 		runID, sessionKey, status, now, storyID,
 	)
 	return err
@@ -632,10 +637,11 @@ func (s *Store) FindStoryBySessionKey(sessionKey string) (*Story, error) {
 	var sessionKeyStr sql.NullString
 	var agentProfileID, latestRunID sql.NullInt64
 	var latestSessKey string
+	var latestRunStatus string
 	err := s.db.QueryRow(
-		`SELECT id, topic_id, name, description, COALESCE(session_key,''), agent_profile_id, latest_run_id, COALESCE(latest_session_key,''), status, created_at, updated_at FROM stories WHERE session_key=?`,
+		`SELECT id, topic_id, name, description, COALESCE(session_key,''), agent_profile_id, latest_run_id, COALESCE(latest_session_key,''), COALESCE(latest_run_status,''), status, created_at, updated_at FROM stories WHERE session_key=?`,
 		sessionKey,
-	).Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &sessionKeyStr, &agentProfileID, &latestRunID, &latestSessKey, &st.Status, &st.CreatedAt, &st.UpdatedAt)
+	).Scan(&st.ID, &st.TopicID, &st.Name, &st.Description, &sessionKeyStr, &agentProfileID, &latestRunID, &latestSessKey, &latestRunStatus, &st.Status, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -649,6 +655,7 @@ func (s *Store) FindStoryBySessionKey(sessionKey string) (*Story, error) {
 		st.LatestRunID = &latestRunID.Int64
 	}
 	st.LatestSessionKey = latestSessKey
+	st.LatestRunStatus = latestRunStatus
 	return &st, nil
 }
 

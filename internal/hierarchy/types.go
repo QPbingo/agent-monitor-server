@@ -32,17 +32,18 @@ type Topic struct {
 }
 
 type Story struct {
-	ID               int64  `json:"id"`
-	TopicID          int64  `json:"topic_id"`
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	SessionKey       string `json:"session_key,omitempty"`
-	AgentProfileID   *int64 `json:"agent_profile_id,omitempty"`
-	LatestRunID      *int64 `json:"latest_run_id,omitempty"`
-	LatestSessionKey string `json:"latest_session_key,omitempty"`
-	Status           string `json:"status"`
-	CreatedAt        int64  `json:"created_at"`
-	UpdatedAt        int64  `json:"updated_at"`
+	ID                int64  `json:"id"`
+	TopicID           int64  `json:"topic_id"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	SessionKey        string `json:"session_key,omitempty"`
+	AgentProfileID    *int64 `json:"agent_profile_id,omitempty"`
+	LatestRunID       *int64 `json:"latest_run_id,omitempty"`
+	LatestRunStatus   string `json:"latest_run_status,omitempty"`
+	LatestSessionKey  string `json:"latest_session_key,omitempty"`
+	Status            string `json:"status"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
 }
 
 type HierarchyTree struct {

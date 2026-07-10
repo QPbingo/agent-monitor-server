@@ -566,7 +566,7 @@ func (h *Handlers) handleUpdateStory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	h.hierStore.UpdateStory(id, req.Name, req.Description)
+	h.hierStore.UpdateStory(id, req.Name, req.Description, "")
 	w.WriteHeader(http.StatusNoContent)
 	h.broadcastHierarchy()
 }

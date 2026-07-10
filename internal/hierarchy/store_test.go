@@ -45,6 +45,27 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
+func createTestStory(t *testing.T, s *Store) *Story {
+	t.Helper()
+	ws, err := s.CreateWorkspace("test-ws", "")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	proj, err := s.CreateProject(ws.ID, "test-proj", "")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	topic, err := s.CreateTopic(proj.ID, "test-topic", "", "claude")
+	if err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
+	story, err := s.CreateStory(topic.ID, "test-story", "")
+	if err != nil {
+		t.Fatalf("create story: %v", err)
+	}
+	return story
+}
+
 func TestGetWorkspaceIDForTopic(t *testing.T) {
 	s := newTestStore(t)
 	ws, err := s.CreateWorkspace("ws1", "")
@@ -173,8 +194,34 @@ func TestStoryAgentFieldsRoundTrip(t *testing.T) {
 	if got3.LatestSessionKey != "sess-key-1" {
 		t.Errorf("expected latest_session_key sess-key-1, got %s", got3.LatestSessionKey)
 	}
-	if got3.Status != "running" {
-		t.Errorf("expected status running, got %s", got3.Status)
+	if got3.LatestRunStatus != "running" {
+		t.Errorf("expected latest_run_status running, got %s", got3.Status)
+	}
+}
+
+func TestUpdateStoryRunSummaryDoesNotOverwriteStoryStatus(t *testing.T) {
+	s := newTestStore(t)
+	story := createTestStory(t, s)
+
+	if err := s.UpdateStory(story.ID, "Story", "desc", "in_progress"); err != nil {
+		t.Fatalf("UpdateStory: %v", err)
+	}
+	if err := s.UpdateStoryRunSummary(story.ID, 99, "sess-abc", "running"); err != nil {
+		t.Fatalf("UpdateStoryRunSummary: %v", err)
+	}
+
+	got, err := s.GetStory(story.ID)
+	if err != nil {
+		t.Fatalf("GetStory: %v", err)
+	}
+	if got.Status != "in_progress" {
+		t.Fatalf("story status = %q, want in_progress", got.Status)
+	}
+	if got.LatestRunStatus != "running" {
+		t.Fatalf("latest run status = %q, want running", got.LatestRunStatus)
+	}
+	if got.LatestSessionKey != "sess-abc" {
+		t.Fatalf("latest session key = %q, want sess-abc", got.LatestSessionKey)
 	}
 }
 
